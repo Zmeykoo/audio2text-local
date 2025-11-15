@@ -35,30 +35,12 @@ def convert_to_wav(file_path: str, output_path: str = None) -> str:
 
 
 def write_transcript(transcript: dict, file_name: str) -> None:
-    output_file = "data"+  file_name.rsplit(".", 1)[0] + uuid.uuid4() +".json"
-    with open(output_file, "w", encoding="utf-8") as f:
-        json.dump(transcript, f, ensure_ascii=False, indent=4)
-
-    logging.info(f"Transcript written to {output_file}")
-
-
-def write_transcript(transcript: dict, file_name: str) -> None:
-    """
-    Write transcript to a JSON file with a unique identifier.
-    
-    Args:
-        transcript: Dictionary containing transcript data
-        file_name: Original file name to derive output name from
-        
-    Returns:
-        Path object of the written file
-    """
     base_name = Path(file_name).stem
     output_file = Path("data") / f"{base_name}_{uuid.uuid4().hex[:5]}.json"
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
-    
+
     with open(output_file, "w", encoding="utf-8") as f:
         json.dump(transcript, f, ensure_ascii=False, indent=4)
-    
+
     logging.info(f"Transcript written to {output_file}")

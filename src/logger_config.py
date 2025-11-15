@@ -24,7 +24,7 @@ def configure_logging(debug_mode: bool = False, SUPER_debug_mode: bool = False):
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
 
-    noisy_loggers = [ #TODO: add FutureWarnings and so on
+    noisy_loggers = [  # TODO: add FutureWarnings and so on
         "urllib3",
         "numba",
     ]
