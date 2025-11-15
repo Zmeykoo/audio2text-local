@@ -1,0 +1,20 @@
+*.csv
+*.xlsx
+*.mp3
+*.mp4a
+*.m4a
+*.wav
+
+*.pyc
+__pycache__/
+.env
+.vscode
+logs/
+logs.log
+*.log
+
+# Test files
+Test*.*
+
+# Data directory (contains generated outputs)
+data/

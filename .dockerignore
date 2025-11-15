@@ -1,0 +1,32 @@
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info
+dist
+build
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Audio files (mount these at runtime)
+*.m4a
+*.wav
+*.mp3
+
+# Output files
+*.json
+
+# Data directory (mount at runtime)
+data/
