@@ -1,35 +1,36 @@
-# Use NVIDIA CUDA base image with Python support
-FROM nvidia/cuda:12.4.0-runtime-ubuntu22.04
+# Torch wheels from the cu132 index bundle the CUDA runtime libraries,
+# so the minimal "base" CUDA image is enough (the host only needs the driver).
+FROM nvidia/cuda:13.2.0-base-ubuntu24.04
+
+# uv binary from the official image
+COPY --from=ghcr.io/astral-sh/uv:0.12.8 /uv /uvx /bin/
+
+# ffmpeg is required for pydub audio conversion
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ffmpeg \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    UV_PYTHON_INSTALL_DIR=/opt/python \
+    UV_PROJECT_ENVIRONMENT=/app/.venv \
+    PYTHONUNBUFFERED=1 \
+    NVIDIA_VISIBLE_DEVICES=all \
+    NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 WORKDIR /app
 
-# Install Python 3.11 and system dependencies
-# ffmpeg is required for pydub audio conversion
-RUN apt-get update && apt-get install -y \
-    python3.11 \
-    python3-pip \
-    python3.11-dev \
-    ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
+# Install dependencies first (cached layer), uv downloads Python 3.13 itself
+COPY pyproject.toml uv.lock .python-version ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --locked --no-install-project --no-dev
 
-# Create symbolic links for python and pip
-RUN ln -s /usr/bin/python3.11 /usr/bin/python && \
-    ln -s /usr/bin/pip3 /usr/bin/pip
-
-COPY requirements.txt .
-
-# Install PyTorch with CUDA support and other dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-COPY main.py .
+COPY main.py ./
 COPY src/ ./src/
 
 RUN mkdir -p /app/data
 
-# Set environment variables for CUDA and Python
-ENV PYTHONUNBUFFERED=1
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV CUDA_HOME=/usr/local/cuda
+ENV PATH="/app/.venv/bin:$PATH"
 
 CMD ["python", "main.py"]

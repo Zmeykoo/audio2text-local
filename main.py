@@ -14,7 +14,7 @@ from src.utils import convert_to_wav, write_transcript
 
 def create_transcription():
     # Input preparation
-    audio_path = "Test01.wav "  # "Voice1.m4a"
+    audio_path = "Test01.wav"  # "Voice1.m4a"
     file_name = os.path.basename(audio_path)
     format = file_name.rsplit(".", 1)[1].lower()
 
@@ -31,7 +31,7 @@ def create_transcription():
     logging.info(f"Initial device: {device}")
 
     model = AutoModelForSpeechSeq2Seq.from_pretrained(
-        model_id, torch_dtype=torch_dtype, use_safetensors=True
+        model_id, dtype=torch_dtype, use_safetensors=True
     )
 
     try:
@@ -43,7 +43,7 @@ def create_transcription():
         device = "cpu"
         torch_dtype = torch.float32
         model = AutoModelForSpeechSeq2Seq.from_pretrained(
-            model_id, torch_dtype=torch_dtype, use_safetensors=True
+            model_id, dtype=torch_dtype, use_safetensors=True
         )
         model.to(device)
         logging.info(f"Model loaded successfully on {device}")
@@ -60,7 +60,7 @@ def create_transcription():
         feature_extractor=processor.feature_extractor,
         # batch_size=32,
         return_timestamps=True,
-        torch_dtype=torch_dtype,
+        dtype=torch_dtype,
         device=device,
         chunk_length_s=30,  # Process audio in 30-second chunks for better progress tracking
     )

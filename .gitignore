@@ -18,3 +18,6 @@ Test*.*
 
 # Data directory (contains generated outputs)
 data/
+
+# uv virtual environment
+.venv/

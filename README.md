@@ -54,7 +54,7 @@ Local audio transcription service using state-of-the-art deep learning models wi
    sudo systemctl restart docker
 
    # Verify installation
-   docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+   docker run --rm --gpus all nvidia/cuda:13.2.0-base-ubuntu24.04 nvidia-smi
    ```
 
 ## Installation
@@ -75,16 +75,39 @@ MODEL_NAME=openai/whisper-large-v3
 DEVICE=cuda
 ```
 
-### 3. Build Docker Image
+### 3a. Run Locally with uv
+
+Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`).
+
+```bash
+# Install uv (once)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Create .venv with Python 3.13 and install locked dependencies
+uv sync
+
+# Run
+uv run python main.py
+
+# Optional: enable git hooks
+uv run pre-commit install
+```
+
+On Linux, `torch` is installed from the PyTorch CUDA 13.2 index; on macOS the regular
+PyPI build (CPU / Apple MPS) is used. FFmpeg must be installed on the system for non-WAV input.
+
+Add or upgrade dependencies with `uv add <package>` / `uv lock --upgrade`.
+
+### 3b. Build Docker Image
 
 ```bash
 docker build -t audio2text-cuda .
 ```
 
 This will:
-- Pull the NVIDIA CUDA 12.4.0 base image
-- Install Python 3.11 and dependencies
-- Install PyTorch with CUDA support
+- Pull the minimal NVIDIA CUDA 13.2 base image (Ubuntu 24.04)
+- Install Python 3.13 and the locked dependencies with uv
+- Install PyTorch with bundled CUDA libraries
 - Set up FFmpeg for audio processing
 
 ## Usage
@@ -164,8 +187,6 @@ docker run --gpus all \
 Create `docker-compose.yml`:
 
 ```yaml
-version: '3.8'
-
 services:
   audio2text:
     build: .
@@ -217,7 +238,7 @@ CUDA Device: NVIDIA GeForce RTX 3090
 
 2. **Verify Docker can access GPU:**
    ```bash
-   docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+   docker run --rm --gpus all nvidia/cuda:13.2.0-base-ubuntu24.04 nvidia-smi
    ```
 
 3. **Check NVIDIA Container Toolkit:**
@@ -255,19 +276,15 @@ docker logs $(docker ps -lq)
 
 ### CUDA Version Mismatch
 
-Ensure your NVIDIA driver supports CUDA 12.4:
+The image uses PyTorch built for CUDA 13.2, which needs a recent NVIDIA driver (580+).
+Ensure your driver supports CUDA 13.x:
 ```bash
 nvidia-smi | grep "CUDA Version"
 ```
 
-If your driver supports an older CUDA version, modify the Dockerfile base image:
-```dockerfile
-# For CUDA 11.8
-FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
-
-# For CUDA 12.1
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
-```
+If your driver only supports an older CUDA version, switch the PyTorch index in
+`pyproject.toml` (e.g. `https://download.pytorch.org/whl/cu128`), run `uv lock`,
+and change the Dockerfile base image to a matching tag (e.g. `nvidia/cuda:12.8.1-base-ubuntu24.04`).
 
 ## Performance Optimization
 
@@ -295,18 +312,21 @@ docker run --gpus all \
 
 ## Dependencies
 
-- Python 3.11
-- PyTorch 2.9.0 (with CUDA support)
-- Transformers 4.57.1
+- Python 3.13 (managed by uv)
+- PyTorch 2.15 (CUDA 13.2 build on Linux)
+- Transformers 5.22
+- librosa 1.0, pydub (+ audioop-lts)
 - FFmpeg
-- See `requirements.txt` for full list
+- See `pyproject.toml` / `uv.lock` for the full list
 
 ## Project Structure
 
 ```
 audio2text-local/
 ├── Dockerfile          # CUDA-enabled Docker configuration
-├── requirements.txt    # Python dependencies
+├── pyproject.toml      # Project metadata and dependencies (uv)
+├── uv.lock             # Locked dependency versions
+├── .python-version     # Python version used by uv
 ├── main.py            # Main application
 ├── src/
 │   ├── utils.py       # Utility functions

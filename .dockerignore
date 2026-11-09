@@ -30,3 +30,6 @@ build
 
 # Data directory (mount at runtime)
 data/
+
+# Virtual environment
+.venv
