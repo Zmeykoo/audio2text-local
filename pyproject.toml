@@ -1,13 +1,13 @@
 [project]
 name = "audio2text-local"
 version = "0.2.0"
-description = "Local audio transcription with Whisper and CUDA acceleration"
+description = "Local audio transcription with Whisper and automatic GPU/CPU selection"
 readme = "README.md"
 requires-python = ">=3.13,<3.15"
 dependencies = [
     "python-dotenv>=1.2.4",
     # DL frameworks
-    "torch>=2.15.0",
+    "torch>=2.14.0",
     "transformers>=5.22.2",
     "accelerate>=1.15.0",
     "tqdm>=4.70.1",
@@ -17,14 +17,97 @@ dependencies = [
     "librosa>=1.0.0",
 ]
 
+# PyTorch build selection (only matters on Linux/Windows; macOS always uses the
+# PyPI build, which supports Apple Silicon GPUs via MPS).
+# `uv run --no-project scripts/setup.py` picks the right one automatically:
+#   cuda (default) -> NVIDIA GPUs, also runs on CPU
+#   rocm           -> AMD Radeon / Instinct GPUs (+ per-GPU kernels via setup.py)
+#   xpu            -> Intel Arc / Core Ultra GPUs
+#   cpu            -> small CPU-only build
+# Non-default builds need `uv run --no-sync ...`, or plain `uv run` re-syncs to cuda.
 [dependency-groups]
 dev = ["pre-commit>=4.0", "black>=25.0"]
+cuda = ["torch>=2.15.0; sys_platform != 'darwin'"]
+cpu = ["torch>=2.15.0; sys_platform != 'darwin'"]
+xpu = [
+    "torch>=2.15.0; sys_platform != 'darwin'",
+    "triton-xpu; sys_platform != 'darwin' and platform_machine != 'aarch64'",
+]
+# AMD publishes ROCm builds for Windows and Linux (x86_64) on its own index.
+rocm = [
+    "torch>=2.14.0,<2.15; sys_platform != 'darwin' and platform_machine != 'aarch64'",
+    # companions torch pulls in, which must also come from AMD's index
+    "triton; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "rocm; sys_platform != 'darwin' and platform_machine != 'aarch64'",
+    "rocm-sdk-core; sys_platform != 'darwin' and platform_machine != 'aarch64'",
+    "rocm-sdk-libraries; sys_platform != 'darwin' and platform_machine != 'aarch64'",
+    "rocm-bootstrap; sys_platform != 'darwin' and platform_machine != 'aarch64'",
+]
+# GPU kernels are per architecture (~0.5 GB each, ~9 GB for all), so they are not
+# locked here: `uv run scripts/setup_rocm.py` detects your GPU and adds its kernels.
 
-# On Linux pull CUDA-enabled torch wheels; on macOS use the default PyPI build (MPS/CPU).
+[tool.uv]
+default-groups = ["dev", "cuda"]
+conflicts = [
+    [{ group = "cuda" }, { group = "cpu" }, { group = "xpu" }, { group = "rocm" }],
+]
+
 [tool.uv.sources]
-torch = [{ index = "pytorch-cu132", marker = "sys_platform == 'linux'" }]
+torch = [
+    { index = "pypi", marker = "sys_platform == 'darwin'" },
+    { index = "pytorch-cu132", group = "cuda", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-cpu", group = "cpu", marker = "sys_platform != 'darwin'" },
+    { index = "pytorch-xpu", group = "xpu", marker = "sys_platform != 'darwin'" },
+    { index = "amd-rocm", group = "rocm", marker = "sys_platform != 'darwin'" },
+]
+# Triton companion that only lives on the PyTorch XPU index
+triton-xpu = [{ index = "pytorch-xpu", group = "xpu", marker = "sys_platform != 'darwin'" }]
+# ROCm companions that only live on AMD's index
+triton = [{ index = "amd-rocm", group = "rocm", marker = "sys_platform == 'linux'" }]
+rocm = [{ index = "amd-rocm", group = "rocm", marker = "sys_platform != 'darwin'" }]
+rocm-sdk-core = [{ index = "amd-rocm", group = "rocm", marker = "sys_platform != 'darwin'" }]
+rocm-sdk-libraries = [{ index = "amd-rocm", group = "rocm", marker = "sys_platform != 'darwin'" }]
+rocm-bootstrap = [{ index = "amd-rocm", group = "rocm", marker = "sys_platform != 'darwin'" }]
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+explicit = true
 
 [[tool.uv.index]]
 name = "pytorch-cu132"
 url = "https://download.pytorch.org/whl/cu132"
 explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-xpu"
+url = "https://download.pytorch.org/whl/xpu"
+explicit = true
+
+[[tool.uv.index]]
+name = "amd-rocm"
+url = "https://stable.repo.amd.com/rocm/whl-next"
+explicit = true
+
+# AMD publishes one torch version with different deps per OS (the Linux wheel needs
+# triton, the Windows wheel doesn't); uv assumes identical metadata, so spell it out.
+[[tool.uv.dependency-metadata]]
+name = "torch"
+version = "2.14.0+rocm10.1.0"
+requires-dist = [
+    "filelock",
+    "typing-extensions>=4.10.0",
+    "setuptools>=77.0.3",
+    "sympy>=1.13.3",
+    "networkx>=2.5.1",
+    "jinja2",
+    "fsspec>=0.8.5",
+    "rocm[libraries]~=10.1.0",
+    "rocm-bootstrap",
+    "triton==3.8.0+git669b31ac.rocm10.1.0; sys_platform == 'linux'",
+]

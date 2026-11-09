@@ -27,6 +27,9 @@ def configure_logging(debug_mode: bool = False, SUPER_debug_mode: bool = False):
     noisy_loggers = [  # TODO: add FutureWarnings and so on
         "urllib3",
         "numba",
+        "httpx",
+        "httpx2",
+        "huggingface_hub",
     ]
     if not SUPER_debug_mode:
         root_logger.info("disable low level loggers")

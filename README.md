@@ -1,202 +1,195 @@
 # Audio2Text Local
 
-Local audio transcription service using state-of-the-art deep learning models with CUDA GPU acceleration.
+Local audio transcription with OpenAI Whisper (via Hugging Face Transformers).
+Runs on Linux, Windows and macOS. It uses whatever accelerator it finds and falls back to the CPU automatically.
 
 ## Features
 
-- GPU-accelerated audio transcription using CUDA
-- Support for multiple audio formats (MP3, WAV, etc.)
-- Containerized deployment with Docker
-- Automatic audio format conversion using FFmpeg
-- Efficient processing with PyTorch and Transformers
+- Automatic device selection: NVIDIA (CUDA), AMD (ROCm), Intel (XPU), Apple Silicon (MPS), NPU plugins, or CPU
+- Automatic recovery from out-of-memory errors: smaller batch first, then CPU
+- Any audio/video format FFmpeg can read (MP3, M4A, WAV, MP4, ...)
+- Output as JSON with timestamps
+- One setup command that installs the right PyTorch build for your GPU on Linux, Windows and macOS
+- Reproducible installs with [uv](https://docs.astral.sh/uv/), and Docker images for NVIDIA, AMD and CPU
 
-## Prerequisites
+## How device selection works
 
-### System Requirements
+You don't need to configure a device. On startup the app:
 
-- NVIDIA GPU with CUDA support (Compute Capability 3.5 or higher recommended)
-- Linux system (Ubuntu 22.04 or similar)
-- At least 8GB GPU memory (for most models)
+1. Detects the available accelerator through `torch.accelerator` (CUDA/ROCm, XPU, MPS, NPU plugins). If none is found, it uses the CPU.
+2. Loads the model in `float16` on the accelerator (`float32` on CPU).
+3. Picks a starting batch size from the free accelerator memory.
+4. If the accelerator **runs out of memory**, it frees the cache and retries with half the batch size, down to 1.
+5. If that still fails, or the backend raises any other error (driver issue, unsupported op, ...), it **moves the model to the CPU** and finishes there.
 
-### Software Requirements
+On Apple Silicon, ops that MPS doesn't implement automatically run on the CPU (`PYTORCH_ENABLE_MPS_FALLBACK=1`).
 
-1. **NVIDIA Drivers**
-   ```bash
-   # Check if NVIDIA drivers are installed
-   nvidia-smi
-   ```
-   If not installed, follow [NVIDIA Driver Installation Guide](https://docs.nvidia.com/datacenter/tesla/tesla-installation-notes/index.html)
+> Whisper always processes 30-second windows, so a smaller chunk length doesn't reduce memory.
+> Batch size is the setting that matters, and the app adjusts it automatically.
 
-2. **Docker** (version 20.10 or higher)
-   ```bash
-   # Install Docker
-   curl -fsSL https://get.docker.com -o get-docker.sh
-   sudo sh get-docker.sh
+## Configuration
 
-   # Add your user to docker group
-   sudo usermod -aG docker $USER
-   newgrp docker
-   ```
-
-3. **NVIDIA Container Toolkit**
-   ```bash
-   # Add NVIDIA package repositories
-   distribution=$(. /etc/os-release;echo $ID$VERSION_ID)
-   curl -s -L https://nvidia.github.io/nvidia-docker/gpgkey | sudo apt-key add -
-   curl -s -L https://nvidia.github.io/nvidia-docker/$distribution/nvidia-docker.list | \
-     sudo tee /etc/apt/sources.list.d/nvidia-docker.list
-
-   # Install nvidia-docker2
-   sudo apt-get update
-   sudo apt-get install -y nvidia-docker2
-
-   # Restart Docker daemon
-   sudo systemctl restart docker
-
-   # Verify installation
-   docker run --rm --gpus all nvidia/cuda:13.2.0-base-ubuntu24.04 nvidia-smi
-   ```
-
-## Installation
-
-### 1. Clone or Setup Project
+All settings are optional. Set them as environment variables or in a `.env` file in the project root:
 
 ```bash
-cd /path/to/audio2text-local
+MODEL_NAME=openai/whisper-large-v3   # any Whisper model on Hugging Face, e.g. openai/whisper-small
+AUDIO_PATH=data/meeting.m4a          # used when no file is passed on the command line
+DEVICE=auto                          # override only if you really want: auto | cuda | xpu | mps | npu | cpu
+DEBUG_MODE=false                     # true = debug logs + logs.log file
 ```
 
-### 2. Configure Environment
+`whisper-large-v3` needs ~4 GB of GPU memory in fp16 (~7 GB of RAM on CPU). On weaker machines, use
+`openai/whisper-small` or `openai/whisper-base`.
 
-Create a `.env` file for any configuration:
+Transcripts are written to `data/<file-name>_<id>.json`.
+
+---
+
+## Quick start
+
+1. Install [uv](https://docs.astral.sh/uv/) and FFmpeg (see your OS below).
+2. Install the GPU driver if you have a GPU (see your OS below).
+3. From the project folder, let the setup script pick the right PyTorch build for your hardware:
+
+   ```bash
+   uv run --no-project scripts/setup.py
+   ```
+
+   | Detected hardware | Installed build |
+   |---|---|
+   | NVIDIA GPU | CUDA 13.2 |
+   | AMD GPU | ROCm 10.1 + GPU kernels for your exact card (e.g. `gfx1100`) |
+   | Intel Arc / Core Ultra GPU | XPU |
+   | No GPU | small CPU-only build |
+   | macOS | default build (Apple GPU via MPS) |
+
+   To force a choice, pass `--backend cuda|rocm|xpu|cpu`. For AMD, `--arch gfx1100` skips GPU detection.
+
+4. Transcribe. The setup script prints the exact command for your build:
+
+   ```bash
+   uv run python main.py path/to/audio.mp3            # NVIDIA, macOS
+   uv run --no-sync python main.py path/to/audio.mp3  # AMD, Intel, CPU-only
+   ```
+
+   `--no-sync` keeps the build you installed. Without it, `uv run` switches back to the default
+   NVIDIA build. You can also set `UV_NO_SYNC=1` once in your shell, or activate `.venv` and run `python main.py`.
+
+## macOS (Apple Silicon or Intel)
+
+Apple Silicon Macs use the GPU through Metal (MPS) automatically. Intel Macs run on the CPU.
 
 ```bash
-# Example .env file
-MODEL_NAME=openai/whisper-large-v3
-DEVICE=cuda
-```
-
-### 3a. Run Locally with uv
-
-Dependencies are managed with [uv](https://docs.astral.sh/uv/) (`pyproject.toml` + `uv.lock`).
-
-```bash
-# Install uv (once)
 curl -LsSf https://astral.sh/uv/install.sh | sh
+brew install ffmpeg
 
-# Create .venv with Python 3.13 and install locked dependencies
-uv sync
-
-# Run
-uv run python main.py
-
-# Optional: enable git hooks
-uv run pre-commit install
+uv run --no-project scripts/setup.py     # same as `uv sync` on macOS
+uv run python main.py path/to/audio.m4a
 ```
 
-On Linux, `torch` is installed from the PyTorch CUDA 13.2 index; on macOS the regular
-PyPI build (CPU / Apple MPS) is used. FFmpeg must be installed on the system for non-WAV input.
+Docker on macOS can't access the Apple GPU, so run natively for GPU speed.
 
-Add or upgrade dependencies with `uv add <package>` / `uv lock --upgrade`.
-
-### 3b. Build Docker Image
+## Linux
 
 ```bash
-docker build -t audio2text-cuda .
+curl -LsSf https://astral.sh/uv/install.sh | sh
+sudo apt install ffmpeg          # Fedora: sudo dnf install ffmpeg, Arch: sudo pacman -S ffmpeg
+
+uv run --no-project scripts/setup.py
 ```
 
-This will:
-- Pull the minimal NVIDIA CUDA 13.2 base image (Ubuntu 24.04)
-- Install Python 3.13 and the locked dependencies with uv
-- Install PyTorch with bundled CUDA libraries
-- Set up FFmpeg for audio processing
+**NVIDIA:** install a recent driver (580+, supports CUDA 13.x) and check it with `nvidia-smi`.
+You don't need the CUDA toolkit, because PyTorch bundles it.
 
-## Usage
-
-### Running with Docker and CUDA
-
-#### Basic Run
+**AMD:** you only need the `amdgpu` kernel driver, which ships with modern kernels (Ubuntu 24.04+, Fedora 40+, ...).
+You don't need a system ROCm install, because the ROCm runtime comes from pip. Give your user GPU access, then log out and back in:
 
 ```bash
-docker run --gpus all \
-  -v $(pwd)/data:/app/data \
-  audio2text-cuda
+sudo usermod -aG render,video $USER
 ```
 
-#### Run with Specific GPU
+The setup script reads the GPU architecture from the driver (`/sys/class/kfd`) or AMD's `offload-arch` tool.
+Supported: Radeon RX 6000 (gfx103x), RX 7000 (gfx110x), RX 9000 (gfx120x), Ryzen AI APUs (gfx115x),
+Instinct MI100/MI200/MI300/MI350 (gfx908/gfx90a/gfx942/gfx950).
+
+**Intel GPU:** install the [Intel GPU drivers](https://dgpu-docs.intel.com/driver/installation.html).
+
+## Windows
+
+Run these in PowerShell:
+
+```powershell
+powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"
+winget install --id Gyan.FFmpeg -e
+# restart the terminal so uv and ffmpeg are on PATH
+
+uv run --no-project scripts/setup.py
+uv run python main.py C:\path\to\audio.m4a   # add --no-sync for AMD / Intel / CPU builds
+```
+
+**NVIDIA:** install the latest [Game Ready / Studio driver](https://www.nvidia.com/drivers) (580+), then check it with `nvidia-smi`.
+
+**AMD:** install the latest [AMD Software: Adrenalin Edition](https://www.amd.com/en/support/download/drivers.html) driver.
+Native Windows ROCm supports Radeon RX 6000 / 7000 / 9000 and Ryzen AI APUs (gfx103x, gfx110x, gfx115x, gfx120x).
+The setup script finds the architecture with AMD's `offload-arch` tool or through PyTorch.
+If it can't, look up your GPU's `gfx` code and pass it, e.g. `--arch gfx1100`.
+
+**Intel GPU:** install the latest Intel Arc & Iris Xe graphics driver.
+
+---
+
+## Docker
+
+Pick the image for your GPU. Every image falls back to the CPU when no GPU is available.
 
 ```bash
-# Use GPU 0
-docker run --gpus '"device=0"' \
-  -v $(pwd)/data:/app/data \
-  audio2text-cuda
-
-# Use GPUs 0 and 1
-docker run --gpus '"device=0,1"' \
-  -v $(pwd)/data:/app/data \
-  audio2text-cuda
+docker build -t audio2text-cuda .                                         # NVIDIA (default)
+docker build --build-arg TORCH_BACKEND=rocm --build-arg ROCM_ARCH=gfx1100 -t audio2text-rocm .   # AMD
+docker build --build-arg TORCH_BACKEND=cpu -t audio2text-cpu .            # CPU only, smaller
 ```
 
-#### Run with Environment Variables
+Because Docker can't see the GPU while building, the AMD image needs your GPU's architecture as `ROCM_ARCH`. On Linux, find it with:
+`cat /sys/class/kfd/kfd/topology/nodes/*/properties | grep gfx_target_version` (`110000` means `gfx1100`).
+
+Put audio files in `./data`, then:
 
 ```bash
-docker run --gpus all \
-  -v $(pwd)/data:/app/data \
-  -e MODEL_NAME=openai/whisper-large-v3 \
-  -e DEVICE=cuda \
-  audio2text-cuda
+# NVIDIA: Linux, or Windows with Docker Desktop (WSL2)
+docker run --rm --gpus all \
+  -v "$(pwd)/data:/app/data" -v hf-cache:/app/.cache/huggingface \
+  audio2text-cuda data/audio.m4a
+
+# AMD: Linux only
+docker run --rm --device=/dev/kfd --device=/dev/dri --group-add video --group-add render \
+  -v "$(pwd)/data:/app/data" -v hf-cache:/app/.cache/huggingface \
+  audio2text-rocm data/audio.m4a
+
+# CPU: any OS, including macOS
+docker run --rm \
+  -v "$(pwd)/data:/app/data" -v hf-cache:/app/.cache/huggingface \
+  audio2text-cpu data/audio.m4a
 ```
 
-#### Interactive Mode
+The `hf-cache` volume keeps downloaded models between runs. Pass settings with `-e`, e.g. `-e MODEL_NAME=openai/whisper-small`.
+In Windows PowerShell, replace `$(pwd)` with `${PWD}`.
 
-```bash
-docker run --gpus all -it \
-  -v $(pwd)/data:/app/data \
-  audio2text-cuda bash
-```
+**GPU in Docker requirements:**
+- NVIDIA on Linux: driver plus the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+- NVIDIA on Windows: Docker Desktop with the WSL2 backend and a current NVIDIA driver. No extra toolkit is needed.
+- AMD: Linux host with the `amdgpu` driver. On Windows, run natively instead, because Docker can't pass AMD GPUs through.
+- macOS: no GPU passthrough. Use the CPU image or run natively.
 
-#### Run in Background (Detached)
-
-```bash
-docker run --gpus all -d \
-  --name audio2text \
-  -v $(pwd)/data:/app/data \
-  audio2text-cuda
-
-# View logs
-docker logs -f audio2text
-
-# Stop container
-docker stop audio2text
-
-# Remove container
-docker rm audio2text
-```
-
-### Volume Mounting
-
-Mount your audio files directory:
-
-```bash
-docker run --gpus all \
-  -v /path/to/your/audio:/app/data \
-  audio2text-cuda
-```
-
-### Docker Compose (Optional)
-
-Create `docker-compose.yml`:
+Docker Compose example (NVIDIA):
 
 ```yaml
 services:
   audio2text:
     build: .
     image: audio2text-cuda
-    container_name: audio2text
+    command: ["data/audio.m4a"]
     volumes:
       - ./data:/app/data
-    environment:
-      - PYTHONUNBUFFERED=1
-      - NVIDIA_VISIBLE_DEVICES=all
+      - hf-cache:/app/.cache/huggingface
     deploy:
       resources:
         reservations:
@@ -204,136 +197,71 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu]
+volumes:
+  hf-cache:
 ```
 
-Run with:
-```bash
-docker compose up
-```
+For AMD, replace `deploy:` with `devices: ["/dev/kfd", "/dev/dri"]` and `group_add: [video, render]`, and build with the ROCm args.
 
-## Verification
+---
 
-### Check GPU Availability
-
-After starting the container, verify GPU is accessible:
+## Verify which device is used
 
 ```bash
-docker run --gpus all -it audio2text-cuda python -c "import torch; print(f'CUDA Available: {torch.cuda.is_available()}'); print(f'CUDA Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else \"N/A\"}')"
+uv run --no-sync python -c "import torch; print(torch.accelerator.current_accelerator() if torch.accelerator.is_available() else 'cpu')"
 ```
 
-Expected output:
-```
-CUDA Available: True
-CUDA Device: NVIDIA GeForce RTX 3090
-```
+The app also logs the selected device on startup, e.g. `Detected device: CUDA: NVIDIA GeForce RTX 3090` or
+`Detected device: ROCm: AMD Radeon RX 7900 XTX (gfx1100)`.
 
 ## Troubleshooting
 
-### GPU Not Detected
+- **Runs on CPU although I have a GPU:** check the driver and rerun `uv run --no-project scripts/setup.py`.
+  If you ran plain `uv run` after installing an AMD/Intel/CPU build, uv switched back to the NVIDIA build. Rerun setup and use `uv run --no-sync`.
+- **AMD: "GPU kernels for your card are probably missing":** run `uv run --no-project scripts/setup.py --backend rocm`.
+  Also rerun it after any `uv sync`, because `uv sync` removes the per-GPU kernel packages.
+- **AMD: architecture not detected or not supported:** pass it with `--arch gfxXXXX`. Cards older than RX 6000 (Vega, Polaris) have no ROCm kernels and run on the CPU.
+- **Very slow on CPU:** use a smaller model, e.g. `MODEL_NAME=openai/whisper-small`.
+- **`ffmpeg` not found:** install FFmpeg (see your OS section above) and restart the terminal.
+- **Old NVIDIA driver (below 580):** switch the `pytorch-cu132` index URL in `pyproject.toml` to
+  `https://download.pytorch.org/whl/cu128` and run `uv lock`.
 
-1. **Check NVIDIA drivers:**
-   ```bash
-   nvidia-smi
-   ```
-
-2. **Verify Docker can access GPU:**
-   ```bash
-   docker run --rm --gpus all nvidia/cuda:13.2.0-base-ubuntu24.04 nvidia-smi
-   ```
-
-3. **Check NVIDIA Container Toolkit:**
-   ```bash
-   dpkg -l | grep nvidia-docker
-   ```
-
-### Out of Memory Errors
-
-- Reduce batch size in your processing script
-- Use a smaller model variant
-- Close other GPU-intensive applications
-- Monitor GPU memory:
-  ```bash
-  watch -n 1 nvidia-smi
-  ```
-
-### Permission Denied Errors
+## Development
 
 ```bash
-# Ensure user is in docker group
-sudo usermod -aG docker $USER
-newgrp docker
-
-# Or run with sudo
-sudo docker run --gpus all audio2text-cuda
+uv run --no-project scripts/setup.py   # includes dev tools (pre-commit, black); --no-dev to skip
+uv run pre-commit install
+uv add <package>             # add a dependency
+uv lock --upgrade            # upgrade all locked versions
 ```
-
-### Container Exits Immediately
-
-Check logs:
-```bash
-docker logs $(docker ps -lq)
-```
-
-### CUDA Version Mismatch
-
-The image uses PyTorch built for CUDA 13.2, which needs a recent NVIDIA driver (580+).
-Ensure your driver supports CUDA 13.x:
-```bash
-nvidia-smi | grep "CUDA Version"
-```
-
-If your driver only supports an older CUDA version, switch the PyTorch index in
-`pyproject.toml` (e.g. `https://download.pytorch.org/whl/cu128`), run `uv lock`,
-and change the Dockerfile base image to a matching tag (e.g. `nvidia/cuda:12.8.1-base-ubuntu24.04`).
-
-## Performance Optimization
-
-### GPU Memory Management
-
-Add to your Python code:
-```python
-import torch
-
-# Clear cache
-torch.cuda.empty_cache()
-
-# Set memory growth
-torch.cuda.set_per_process_memory_fraction(0.8)
-```
-
-### Multi-GPU Setup
-
-For multi-GPU processing, use:
-```bash
-docker run --gpus all \
-  -e CUDA_VISIBLE_DEVICES=0,1,2,3 \
-  audio2text-cuda
-```
-
-## Dependencies
-
-- Python 3.13 (managed by uv)
-- PyTorch 2.15 (CUDA 13.2 build on Linux)
-- Transformers 5.22
-- librosa 1.0, pydub (+ audioop-lts)
-- FFmpeg
-- See `pyproject.toml` / `uv.lock` for the full list
 
 ## Project Structure
 
 ```
 audio2text-local/
-├── Dockerfile          # CUDA-enabled Docker configuration
-├── pyproject.toml      # Project metadata and dependencies (uv)
-├── uv.lock             # Locked dependency versions
+├── Dockerfile          # Docker image (CUDA, ROCm, XPU or CPU build of PyTorch)
+├── pyproject.toml      # Project metadata, dependencies, PyTorch build groups (uv)
+├── uv.lock             # Locked dependency versions for all platforms
 ├── .python-version     # Python version used by uv
-├── main.py            # Main application
+├── main.py             # Entry point: transcription + fallback logic
+├── scripts/
+│   └── setup.py        # Detects hardware and installs the matching PyTorch build
 ├── src/
-│   ├── utils.py       # Utility functions
+│   ├── device.py         # Accelerator detection and memory helpers
+│   ├── utils.py          # Audio conversion, transcript writing
 │   └── logger_config.py  # Logging configuration
-├── data/              # Audio files directory
-└── .env               # Environment variables (optional)
+├── data/               # Audio files and transcripts
+└── .env                # Environment variables (optional)
 ```
+
+## Dependencies
+
+- Python 3.13 (managed by uv)
+- PyTorch 2.15: CUDA 13.2 / XPU / CPU builds on Linux and Windows, PyPI build on macOS
+- PyTorch 2.14 + ROCm 10.1 for AMD GPUs (AMD's own build, Linux and Windows)
+- Transformers 5.22, Accelerate 1.15
+- librosa 1.0, pydub (+ audioop-lts)
+- FFmpeg (system package)
 
 ## License
 
