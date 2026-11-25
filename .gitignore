@@ -4,6 +4,11 @@
 *.mp4a
 *.m4a
 *.wav
+*.ogg
+*.oga
+*.opus
+*.flac
+*.webm
 
 *.pyc
 __pycache__/
@@ -21,3 +26,9 @@ data/
 
 # uv virtual environment
 .venv/
+
+# Run outputs
+runs/
+
+# macOS
+.DS_Store
